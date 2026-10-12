@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Model files (downloaded from Hugging Face on first run)
+*.pt
+config.json
+assets/
+MODEL_CARD.md
+.gitattributes
+
+# Output
+*.wav
+.DS_Store

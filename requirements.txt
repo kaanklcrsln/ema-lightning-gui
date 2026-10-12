@@ -1,0 +1,2 @@
+ema-lightning>=1.1.2
+sounddevice>=0.5
