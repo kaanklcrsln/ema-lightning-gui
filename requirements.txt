@@ -1,2 +1,8 @@
 ema-lightning>=1.1.2
 sounddevice>=0.5
+
+# EMA Island's voice assistant (Raven)
+google-genai>=2.30
+anthropic>=1.13
+silero-vad>=6.2
+mlx-whisper>=0.4.3; sys_platform == "darwin" and platform_machine == "arm64"

@@ -13,3 +13,6 @@ MODEL_CARD.md
 # Output
 *.wav
 .DS_Store
+
+# Secrets
+.env

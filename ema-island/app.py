@@ -22,6 +22,7 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 import webbrowser
+from collections import deque
 from pathlib import Path
 from tkinter import filedialog
 
@@ -29,6 +30,9 @@ import numpy as np
 import sounddevice as sd
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))  # raven.py sits next to this file
+import raven  # noqa: E402
+from mascot import Mascot  # noqa: E402
 REPO_URL = "https://github.com/kaanklcrsln/ema-lightning-gui"
 
 
@@ -49,7 +53,10 @@ CHIP_HI = blend(ISLAND, TEXT, 0.2)
 LINE = blend(ISLAND, TEXT, 0.18)
 WAVE = blend(ISLAND, TEXT, 0.28)
 DANGER = "#FF8F8F"
-THEMES = {"Mavi": "#8EC5FF", "Yeşil": "#93E2B0", "Turuncu": "#FFAE85", "Mor": "#C4A7FF"}
+MASCOT = "#C7C3FF"
+ACCENT = "#C4A7FF"  # lavender purple, the island's one color
+BAR = "#0D0D11"  # bottom prompt bar
+BAR_EDGE = "#2A2833"
 
 RATES = (8000, 16000, 24000, 48000)
 SPEED_MIN, SPEED_MAX = 0.25, 4.0
@@ -167,6 +174,7 @@ class Cocoa:
             getattr(self.lib, fn).restype, getattr(self.lib, fn).argtypes = rt, at
         self.x86 = platform.machine() == "x86_64"  # large structs come back through objc_msgSend_stret there
         self._yes = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(lambda s, c: True)
+        self._quiet = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(lambda s, c, e: None)
 
     def cls(self, name):
         return self.lib.objc_getClass(name.encode())
@@ -188,6 +196,9 @@ class Cocoa:
             for sel in (b"canBecomeKeyWindow", b"canBecomeMainWindow"):
                 self.lib.class_replaceMethod(tkwin, self.lib.sel_registerName(sel),
                                              ctypes.cast(self._yes, ctypes.c_void_p), b"c@:")
+            # an unhandled key would otherwise end in NSBeep; Tk has already handled it by then
+            self.lib.class_replaceMethod(tkwin, self.lib.sel_registerName(b"noResponderFor:"),
+                                         ctypes.cast(self._quiet, ctypes.c_void_p), b"v@::")
 
     @property
     def app(self):
@@ -219,8 +230,48 @@ class Cocoa:
         self.send(self.app, "setActivationPolicy:", 1, argtypes=(ctypes.c_long,))
 
     def deactivate(self):
-        """Hand keyboard focus back to the app that had it."""
-        self.send(self.app, "deactivate")
+        """Hand keyboard focus back to the app that had it before we took it."""
+        prev, self.prev = getattr(self, "prev", None), None
+        if prev:
+            self.send(prev, "activateWithOptions:", 2, argtypes=(ctypes.c_ulong,))  # IgnoringOtherApps
+            self.send(prev, "release")
+        elif self.send(self.app, "isActive", restype=ctypes.c_bool):
+            self.send(self.app, "deactivate")
+
+    def visible_bottom(self):
+        """Height of the Dock (or 0) at the bottom of the main screen, in points."""
+        scr = self.send(self.cls("NSScreen"), "mainScreen")
+        return self.send(scr, "visibleFrame", restype=Rect).y - self.send(scr, "frame", restype=Rect).y
+
+    def window_for(self, toplevel):
+        """The NSWindow behind a Tk toplevel, found by its frame (Cocoa counts y from the bottom)."""
+        screen_h = toplevel.winfo_screenheight()
+        x, y, w, h = toplevel.winfo_rootx(), toplevel.winfo_rooty(), toplevel.winfo_width(), toplevel.winfo_height()
+        wins = self.send(self.app, "windows")
+        for i in range(self.send(wins, "count", restype=ctypes.c_ulong)):
+            win = self.send(wins, "objectAtIndex:", i, argtypes=(ctypes.c_ulong,))
+            f = self.send(win, "frame", restype=Rect)
+            if abs(f.x - x) < 3 and abs(f.y - (screen_h - y - h)) < 3 and abs(f.w - w) < 3 and abs(f.h - h) < 3:
+                return win
+        return None
+
+    def take_focus(self, win=None):
+        """Clicking a borderless window of an accessory app doesn't activate it, so keys never arrive.
+        Activate explicitly and make our window key; Tk then delivers FocusIn and keystrokes."""
+        if not self.send(self.app, "isActive", restype=ctypes.c_bool):
+            if not getattr(self, "prev", None):  # remember who had focus, to give it back on collapse
+                prev = self.send(self.send(self.cls("NSWorkspace"), "sharedWorkspace"), "frontmostApplication")
+                self.prev = self.send(prev, "retain") if prev else None
+            self.send(self.app, "activateIgnoringOtherApps:", True, argtypes=(ctypes.c_bool,))
+        wins = self.send(self.app, "windows")
+        if win is None and self.send(wins, "count", restype=ctypes.c_ulong):
+            win = self.send(wins, "objectAtIndex:", 0, argtypes=(ctypes.c_ulong,))
+        if win:
+            self.send(win, "makeKeyAndOrderFront:", None, argtypes=(ctypes.c_void_p,))
+            # Tk's content view must be first responder; otherwise every key falls through to the
+            # window, which finds no handler and plays the system alert sound
+            self.send(win, "makeFirstResponder:", self.send(win, "contentView"), restype=ctypes.c_bool,
+                      argtypes=(ctypes.c_void_p,))
 
 
 # ---------- drawing helpers ----------
@@ -242,7 +293,7 @@ def rrect(cv, x1, y1, x2, y2, r, **kw):
     return cv.create_polygon(pts, **kw)
 
 
-def island(cv, cx, w, h, r, s, **kw):
+def island_points(cx, w, h, r, s):
     """Notch-like shape hanging from the top edge: square top, rounded bottom (r), concave shoulders (s)."""
     lx, rx = cx - w / 2, cx + w / 2
     r = max(0, min(r, w / 2, h))
@@ -257,7 +308,7 @@ def island(cv, cx, w, h, r, s, **kw):
     arc(lx + r, h - r, r, 180, 90)  # bottom left
     arc(rx - r, h - r, r, 90, 0)  # bottom right
     arc(rx + s, s, s, 180, 270)  # right shoulder
-    return cv.create_polygon(pts, **kw)
+    return pts
 
 
 def draw_icon(cv, name, cx, cy, col, s=1.0, tags=()):
@@ -294,6 +345,27 @@ def draw_icon(cv, name, cx, cy, col, s=1.0, tags=()):
             cv.create_line(*P(-8, y, 8, y), **line)
             cv.create_oval(*P(k - 2.4, y - 2.4, k + 2.4, y + 2.4), fill=ISLAND, outline=col, width=line["width"],
                            tags=tags)
+    elif name in ("mic", "mic_off"):
+        rrect(cv, *P(-3.5, -9, 3.5, 2), 3.5 * s, fill="", outline=col, width=line["width"], tags=tags)
+        cv.create_arc(*P(-6.5, -6.5, 6.5, 6.5), start=200, extent=140, style="arc", outline=col,
+                      width=line["width"], tags=tags)
+        cv.create_line(*P(0, 6.5, 0, 9), **line)
+        if name == "mic_off":
+            cv.create_line(*P(-8, -9, 8, 9), **line)
+    elif name == "spark":  # Raven mode: typed text goes to the assistant
+        cv.create_polygon(*P(0, -9, 2.2, -2.2, 9, 0, 2.2, 2.2, 0, 9, -2.2, 2.2, -9, 0, -2.2, -2.2), fill=col,
+                          outline="", tags=tags)
+    elif name == "speaker":  # read mode: typed text is read aloud as is
+        cv.create_polygon(*P(-8, -3, -4, -3, 1, -8, 1, 8, -4, 3, -8, 3), fill="", outline=col, width=line["width"],
+                          joinstyle="round", tags=tags)
+        cv.create_arc(*P(-2, -6, 8, 6), start=-50, extent=100, style="arc", outline=col, width=line["width"],
+                      tags=tags)
+    elif name == "arrow_up":
+        cv.create_line(*P(0, 7, 0, -7), **line)
+        cv.create_line(*P(-6, -1, 0, -7, 6, -1), **line)
+    elif name == "close":
+        cv.create_line(*P(-5, -5, 5, 5), **line)
+        cv.create_line(*P(-5, 5, 5, -5), **line)
 
 
 def ease_out_back(t, c=0.9):
@@ -309,6 +381,121 @@ def ease_out(t):
     return 1 - (1 - t) ** 3
 
 
+# ---------- bottom prompt bar ----------
+class PromptBar:
+    """A small prompt box at the bottom center of the screen, shown while the island is open:
+    type to Raven without reaching for the notch."""
+
+    H = 52
+
+    def __init__(self, island):
+        self.isl, self.w = island, EXP_W
+        self.visible, self.alpha, self.fade_id = False, 0.0, 0
+        self.win = tk.Toplevel(island.root)
+        self.win.overrideredirect(True)
+        self.win.attributes("-transparent", True)
+        self.win.attributes("-alpha", 0.0)
+        self.win.configure(bg="systemTransparent")
+        self.cv = tk.Canvas(self.win, width=self.w, height=self.H, bg="systemTransparent", highlightthickness=0, bd=0)
+        self.cv.pack()
+        self.entry = tk.Entry(self.cv, bg=BAR, fg=TEXT, relief="flat", highlightthickness=0, bd=0,
+                              font=island.f_bar, insertbackground=ACCENT, selectbackground=blend(BAR, ACCENT, 0.4),
+                              selectforeground=TEXT)
+        self.placeholder = True
+        self._set_placeholder()
+        self.entry.bind("<FocusIn>", self._clear_placeholder)
+        self.entry.bind("<FocusOut>", lambda e: self.text() or self._set_placeholder())
+        self.entry.bind("<ButtonPress-1>", lambda e: island._focus(self.entry), add="+")
+        self.entry.bind("<Return>", lambda e: self.submit())
+        self.entry.bind("<Escape>", lambda e: island._escape())
+        self.x = int(round(island.notch_cx - self.w / 2))
+        self.y = int(island.root.winfo_screenheight() - island.mac.visible_bottom() - self.H - 14)
+        self.win.geometry(f"{self.w}x{self.H}+{self.x}+{self.y}")
+        self._draw()
+        self.win.withdraw()
+
+    def _draw(self):
+        cv, w, h, cy = self.cv, self.w, self.H, self.H / 2
+        rrect(cv, 1, 1, w - 1, h - 1, 16, fill=BAR, outline=BAR_EDGE, width=1)
+        cv.create_window(58, cy, window=self.entry, anchor="w", width=w - 58 - 150)
+        new = cv.create_text(w - 60, cy, text="Yeni sohbet", anchor="e", fill=MUTED, font=self.isl.f_s,
+                             tags=("new",))
+        cv.tag_bind("new", "<Enter>", lambda e: (cv.itemconfigure(new, fill=TEXT), cv.configure(cursor="hand2")))
+        cv.tag_bind("new", "<Leave>", lambda e: (cv.itemconfigure(new, fill=MUTED), cv.configure(cursor="")))
+        cv.tag_bind("new", "<ButtonRelease-1>", lambda e: self.isl.new_chat())
+        cv.tag_bind("send", "<Enter>", lambda e: cv.configure(cursor="hand2"))
+        cv.tag_bind("send", "<Leave>", lambda e: cv.configure(cursor=""))
+        cv.tag_bind("send", "<ButtonRelease-1>", lambda e: self.submit())
+
+    def draw_live(self):
+        """Raven's face on the left and the send button, which lights up when there is something to send."""
+        cv, cy = self.cv, self.H / 2
+        cv.delete("live")
+        if self.isl.mascot:
+            self.isl.mascot.draw(cv, 30, cy + 1, 36, ("live",))
+        x, ready = self.w - 30, bool(self.text())
+        rrect(cv, x - 17, cy - 17, x + 17, cy + 17, 9, fill=ACCENT if ready else CHIP, outline="",
+              tags=("live", "send"))
+        draw_icon(cv, "arrow_up", x, cy, ISLAND if ready else DIM, 0.9, ("live", "send"))
+
+    def text(self):
+        return "" if self.placeholder else self.entry.get().strip()
+
+    def _set_placeholder(self):
+        self.entry.delete(0, "end")
+        self.entry.insert(0, "Raven'a sor…")
+        self.entry.configure(fg=DIM)
+        self.placeholder = True
+
+    def _clear_placeholder(self, _=None):
+        if self.placeholder:
+            self.entry.delete(0, "end")
+            self.entry.configure(fg=TEXT)
+            self.placeholder = False
+
+    def submit(self):
+        text = self.text()
+        if text:
+            self.entry.delete(0, "end")
+            self.isl._ask(text)
+
+    def contains(self, px, py):
+        return self.visible and self.x <= px <= self.x + self.w and self.y <= py <= self.y + self.H
+
+    def focused(self):
+        return self.visible and self.isl.root.focus_get() is self.entry
+
+    def show(self):
+        if self.visible:
+            return
+        self.visible = True
+        self.win.deiconify()
+        self.win.update_idletasks()
+        self.isl.mac.float_windows()  # a newly shown window needs the level and Space behavior too
+        self._fade(1.0)
+
+    def hide(self):
+        if not self.visible:
+            return
+        self.visible = False
+        if not self.text():
+            self._set_placeholder()
+        self._fade(0.0)
+
+    def _fade(self, target, token=None):
+        if token is None:
+            self.fade_id += 1
+            token = self.fade_id
+        if token != self.fade_id:  # a newer fade took over
+            return
+        self.alpha += max(min(target - self.alpha, 0.2), -0.2)
+        self.win.attributes("-alpha", self.alpha)
+        if abs(self.alpha - target) > 1e-3:
+            self.win.after(16, self._fade, target, token)
+        elif target == 0:
+            self.win.withdraw()
+
+
 # ---------- app ----------
 class Island:
     def __init__(self, root):
@@ -322,6 +509,7 @@ class Island:
         mono = pick_font(root, "SF Mono", "Menlo", "Monaco", "Courier")
         self.f_s, self.f_xs, self.f_text = (fam, 11), (fam, 10, "bold"), (fam, 14)
         self.f_mono, self.f_mono_s = (mono, 11), (mono, 10)
+        self.f_h, self.f_reply, self.f_bar = (fam, 12, "bold"), (fam, 13), (fam, 14)
 
         # geometry: collapsed pill, expanded panel heights
         self.cw = (self.notch_r - self.notch_l) + 2 * WING
@@ -329,19 +517,29 @@ class Island:
         self.fy2 = self.fy1 + 68
         self.row = self.fy2 + 26
         self.eh_closed, self.eh_open = self.row + 34, self.row + 141
+        self.eh_assist = self.nh + 140
 
         # state
         self.tts = self.speech = self.speech_key = self.bars = None
         self.playing = self.busy = self.seed_locked = self.settings_open = False
         self.expanded = self.tweening = self.modal = False
         self.play_t0 = self.play_off = self.progress = 0.0
-        self.speed, self.rate, self.theme = 1.0, 48000, "Turuncu"
+        self.speed, self.rate = 1.0, 48000
         self.status_text, self.status_col = "Model yükleniyor…", MUTED
         self.events = queue.Queue()
         self.hits, self.hover, self.pressed = {}, None, None
         self.hover_since, self.last_inside = None, 0.0
+        # voice assistant: boot -> wake (waiting for "Raven") -> listen -> think -> speak -> wake
+        self.voice, self.assist, self.raven_mode, self.wake_enabled = "boot", False, True, True
+        self.ear_ready, self.ear_error = False, None
+        self.user_text = self.reply = ""
+        self.hold_until = 0.0
+        self.levels = deque([0.0] * 48, maxlen=48)
+        self.voice_cfg = (1.0, None, 48000)  # speed, seed, rate for Raven's replies (read off the UI thread)
+        self.cancel = threading.Event()  # replaced per request, so a late old reply can never leak into a new one
         self.cur = self._target()
         self.win_w = self.win_h = self.win_x = 0
+        self.shape_id, self.shape_only = None, False
 
         root.title("EMA Island")
         root.overrideredirect(True)
@@ -358,6 +556,8 @@ class Island:
         self.seed_entry.bind("<FocusOut>", lambda e: self.seed_entry.get().strip() or self._seed_set(""))
         self.seed_ph = False
         self._seed_set("")
+        for w in (self.text, self.seed_entry):  # clicking an input must also pull keyboard focus to the island
+            w.bind("<ButtonPress-1>", lambda e, w=w: self._focus(w), add="+")
 
         cv = self.cv
         cv.bind("<Motion>", self._motion)
@@ -369,7 +569,7 @@ class Island:
         cv.bind("<MouseWheel>", self._wheel)
         root.bind("<Command-Return>", lambda e: self.play())
         root.bind("<Control-Return>", lambda e: self.play())
-        root.bind("<Escape>", lambda e: self.stop() if self.playing else self.collapse())
+        root.bind("<Escape>", lambda e: self._escape())
         root.bind("<Command-q>", lambda e: self.quit())
 
         self.mac.accessory()
@@ -377,13 +577,24 @@ class Island:
         root.update()  # the NSWindow exists only once Tk has mapped it
         self.mac.float_windows()  # level first: only above the menu bar may the window sit at y = 0
         self._resize(self._collapsed_size(), force=True)
+        try:  # Raven's mascot, from the Avatar Lab export in the repo root
+            self.mascot = Mascot(HERE.parent / "kirby-avatar" / "kirby.avatar.ts", body=MASCOT)
+        except (OSError, ValueError, KeyError) as e:
+            print(f"Maskot yüklenemedi: {e}", file=sys.stderr)
+            self.mascot = None
+        self.mood, self.mood_until, self.reply_mood = None, 0.0, "happy"
+        post = lambda kind, value: self.events.put((kind, value))  # noqa: E731 - worker threads report here
+        self.mouth = raven.Mouth(lambda: self.tts, lambda: self.voice_cfg, post)
+        self.brain = raven.Brain()
+        self.ear = raven.Ear(post)
+        self.bar = PromptBar(self)
         self.draw()
         self._poll()
         threading.Thread(target=self._load_model, daemon=True).start()
 
     @property
     def accent(self):
-        return THEMES[self.theme]
+        return ACCENT
 
     @property
     def accent2(self):
@@ -400,8 +611,11 @@ class Island:
         w, h = size
         if (w, h) == (self.win_w, self.win_h) and not force:
             return
+        old_x = self.win_x
         self.win_w, self.win_h = w, h
         self.win_x = int(round(self.notch_cx - w / 2))
+        if old_x and old_x != self.win_x:  # the window grows/shrinks around the notch: keep drawings in place
+            self.cv.move("all", old_x - self.win_x, 0)
         self.cv.configure(width=w, height=h)
         self.root.geometry(f"{w}x{h}+{self.win_x}+0")
         self.root.update_idletasks()
@@ -410,7 +624,8 @@ class Island:
     def _target(self):
         if not self.expanded:
             return dict(w=self.cw, h=self.nh, r=10, s=6)
-        return dict(w=EXP_W, h=self.eh_open if self.settings_open else self.eh_closed, r=26, s=12)
+        h = self.eh_assist if self.assist else (self.eh_open if self.settings_open else self.eh_closed)
+        return dict(w=EXP_W, h=h, r=26, s=12)
 
     def _animate(self, dur, ease):
         self.tw_from, self.tw_t0, self.tw_dur, self.tw_ease = dict(self.cur), time.perf_counter(), dur, ease
@@ -422,17 +637,26 @@ class Island:
         t = min((time.perf_counter() - self.tw_t0) / self.tw_dur, 1)
         e, tgt = self.tw_ease(t), self._target()
         self.cur = {k: self.tw_from[k] + (tgt[k] - self.tw_from[k]) * e for k in tgt}
-        self.draw()
         if t < 1:
+            # opening/closing: just reshape the outline (content would pop in and out as the width
+            # overshoots); already open and only the height changes: draw content, clipped, as it slides
+            if self.expanded and abs(self.tw_from["w"] - EXP_W) < 3:
+                self.draw()
+            else:
+                self._draw_shape()
             self.root.after(12, self._tween)
             return
         self.tweening = False
         if not self.expanded:  # shrink the window to the pill so it never blocks clicks underneath
             self._resize(self._collapsed_size())
-            self.draw()
-
-    def expand(self):
+        self.draw()
         if self.expanded:
+            self.bar.show()
+
+    def expand(self, assist=False):
+        self.assist = assist or self._voice_active()
+        if self.expanded:
+            self._animate(0.32, ease_out)  # already open: just switch view
             return
         self.expanded = True
         self._resize(self._expanded_size())
@@ -441,7 +665,8 @@ class Island:
     def collapse(self):
         if not self.expanded:
             return
-        self.expanded = False
+        self.expanded = self.assist = False
+        self.bar.hide()
         self._unhover()
         self.cv.focus_set()
         self.mac.deactivate()
@@ -480,8 +705,12 @@ class Island:
         self.hover = None
         self.cv.configure(cursor="")
 
+    def _focus(self, widget):
+        self.mac.take_focus(self.mac.window_for(widget.winfo_toplevel()))
+        widget.focus_force()
+
     def _press(self, e):
-        self.cv.focus_set()
+        self._focus(self.cv)
         self.pressed = h = self._hit_at(e.x, e.y)
         if not self.expanded:
             self.expand()
@@ -508,80 +737,161 @@ class Island:
             h["wheel"](1 if e.delta > 0 else -1)
 
     # ----- drawing -----
+    def _draw_shape(self):
+        """Animation frame: move the island outline only; the first frame clears the content."""
+        cv, c = self.cv, self.cur
+        cx = self.win_w / 2
+        self.lx, self.rx = cx - c["w"] / 2, cx + c["w"] / 2
+        pts = island_points(cx, c["w"], c["h"], c["r"], c["s"])
+        if self.shape_only:
+            cv.coords(self.shape_id, *pts)
+            return
+        cv.delete("all")
+        self.hits, self.hover = {}, None
+        self.shape_id = cv.create_polygon(pts, fill=ISLAND, outline="")
+        self.shape_only = True
+
     def draw(self):
         cv, c = self.cv, self.cur
         cv.delete("all")
-        self.hits, self.hover = {}, None
+        self.hits, self.hover, self.shape_only = {}, None, False
         cx = self.win_w / 2
         self.lx, self.rx = cx - c["w"] / 2, cx + c["w"] / 2
-        island(cv, cx, c["w"], c["h"], c["r"], c["s"], fill=ISLAND, outline="")
+        self.shape_id = cv.create_polygon(island_points(cx, c["w"], c["h"], c["r"], c["s"]), fill=ISLAND,
+                                          outline="")
         if self.expanded and abs(c["w"] - EXP_W) < 3:
             self._header()
-            self._body()
+            self._assist_body() if self.assist else self._body()
         elif not self.expanded and abs(c["w"] - self.cw) < 3 and not self.tweening:
             self.draw_ind()
 
     def draw_ind(self, phase=0.0):
-        """Collapsed pill: little bars left of the notch, status right of it."""
+        """Collapsed pill: Raven's face left of the notch, status right of it."""
         cv, t = self.cv, ("ind",)
         cv.delete("ind")
         y = self.nh / 2
         nl, nr = self.notch_l - self.win_x, self.notch_r - self.win_x
-        lx = (self.lx + nl) / 2
-        for i, base in enumerate((4, 8, 6, 3)):
-            if self.playing or self.busy:
-                hh = 2 + 5 * (0.5 + 0.5 * math.sin(phase * (9 if self.playing else 5) + i * 1.3))
-                col = self.accent
-            else:
-                hh, col = base / 2, DIM
-            x = lx - 7 + i * 4.7
-            cv.create_line(x, y - hh, x, y + hh, fill=col, width=2.5, capstyle="round", tags=t)
-        rx = (nr + self.rx) / 2
-        if self.busy:
+        lx, rx = (self.lx + nl) / 2, (nr + self.rx) / 2
+        if self.mascot:
+            self.mascot.play(self._mascot_anim())
+            self.mascot.draw(cv, lx, y + 1, self.nh - 2, t)
+        live = {"listen": self.ear.level, "speak": self.mouth.level}.get(self.voice)
+        if live is not None or self.playing:  # sound bars: the mic while listening, the voice while speaking
+            level = live if live is not None else 0.6
+            for i in range(4):
+                hh = 1.5 + 6 * level * (0.6 + 0.4 * math.sin(phase * 9 + i * 1.3))
+                x = rx - 7 + i * 4.7
+                cv.create_line(x, y - hh, x, y + hh, fill=self.accent, width=2.5, capstyle="round", tags=t)
+        elif self.busy or self.voice == "think":
             cv.create_arc(rx - 6, y - 6, rx + 6, y + 6, start=-phase * 360, extent=270, style="arc",
                           outline=self.accent, width=2, tags=t)
-        elif self.playing:
-            pos = self.play_off + time.perf_counter() - self.play_t0
-            cv.create_text(rx, y, text=f"{int(pos // 60)}:{int(pos % 60):02d}", fill=MUTED, font=self.f_mono_s,
-                           tags=t)
-        else:
-            cv.create_oval(rx - 3.5, y - 3.5, rx + 3.5, y + 3.5, fill=self.accent, outline="", tags=t)
+        else:  # listening for "Raven": accent; mic off or still loading: dim; mic problem: red
+            listening = self.voice != "boot" and self.wake_enabled
+            col = DANGER if self.ear_error else (self.accent if listening else DIM)
+            cv.create_oval(rx - 3.5, y - 3.5, rx + 3.5, y + 3.5, fill=col, outline="", tags=t)
+
+    def _mascot_anim(self):
+        """The avatar animation that fits what Raven is doing right now."""
+        if self.voice == "listen":
+            return "listening"
+        if self.voice == "think":
+            return "thinking"
+        if self.voice == "speak":
+            return self.reply_mood
+        if time.perf_counter() < self.mood_until:
+            return self.mood
+        if self.ear_error:
+            return "confused"
+        if self.busy:
+            return "working"
+        if self.playing:
+            return "happy"
+        if self.voice == "boot" or not self.wake_enabled:
+            return "sleeping"
+        return "idle"
 
     def _header(self):
         cv, y = self.cv, self.nh / 2
         x1, x2 = self.lx + 22, self.rx - 22
-        for i, name in enumerate(THEMES):
-            self._theme_dot(name, x1 + 6 + i * 18, y)
+        self._header_icon("mic", "mic" if self.wake_enabled else "mic_off", x1 + 8, y,
+                          self.toggle_wake, on=self.wake_enabled and self.voice != "boot")
         for i, (key, icon, cmd) in enumerate((("quit", "power", self.quit),
                                               ("gh", "github", lambda: webbrowser.open(REPO_URL)),
-                                              ("set", "sliders", self.toggle_settings))):
-            self._header_icon(key, icon, x2 - 8 - i * 30, y, cmd)
+                                              ("set", "sliders", self.toggle_settings),
+                                              ("mode", "spark" if self.raven_mode else "speaker", self.toggle_mode))):
+            on = (key == "set" and self.settings_open) or (key == "mode" and self.raven_mode)
+            self._header_icon(key, icon, x2 - 8 - i * 30, y, cmd, on=on)
 
-    def _header_icon(self, key, icon, x, y, cmd):
+    def _header_icon(self, key, icon, x, y, cmd, on=False):
         cv = self.cv
 
         def draw(col):
             cv.delete(key)
             draw_icon(cv, icon, x, y, col, 0.85, (key,))
 
-        on = key == "set" and self.settings_open
         draw(self.accent if on else MUTED)
         self.hit(key, (x - 13, y - 13, x + 13, y + 13), click=cmd,
                  enter=lambda: draw(TEXT), leave=lambda: draw(self.accent if on else MUTED))
 
-    def _theme_dot(self, name, x, y):
-        cv, tag = self.cv, f"theme{name}"
+    def _assist_body(self):
+        """Conversation view: Raven on the left; what it heard and its reply streaming in on the right."""
+        cv, h = self.cv, self.cur["h"]
+        x1, x2, y = self.lx + 22, self.rx - 22, self.nh + 24
+        tx = x1 + (104 if self.mascot else 0)
+        first = cv.find_all()[-1]
+        self.as_geo = (x1, tx, x2, y)
+        label = {"listen": "Dinliyorum…", "think": "Düşünüyor…"}.get(self.voice, "Raven")
+        self.as_label_w = tkfont.Font(font=self.f_h).measure(label)
+        cv.create_text(tx, y, text=label, anchor="w", fill=self.accent, font=self.f_h)
+        self._icon_btn("as_close", x2 - 11, y, 11, "close", self.end_assist, scale=0.6)
+        if self.user_text:
+            cv.create_text(tx, y + 24, text=self._clip(f"“{self.user_text}”", 46 if self.mascot else 64), anchor="w",
+                           fill=MUTED, font=self.f_s)
+        cv.create_text(tx, y + 40, text=self._tail(self.reply), anchor="nw", width=x2 - tx, fill=TEXT,
+                       font=self.f_reply, tags=("as_reply",))
+        self.draw_assist_live()
+        for i in cv.find_all():
+            if i > first and (cv.bbox(i) or (0, 0, 0, 0))[3] > h - 6:
+                cv.itemconfigure(i, state="hidden")
 
-        def draw(hover):
-            cv.delete(tag)
-            if name == self.theme or hover:
-                cv.create_oval(x - 8, y - 8, x + 8, y + 8, outline=TEXT if name == self.theme else MUTED,
-                               width=1.5, tags=(tag,))
-            cv.create_oval(x - 5, y - 5, x + 5, y + 5, fill=THEMES[name], outline="", tags=(tag,))
+    def draw_assist_live(self, now=0.0):
+        cv, (x1, tx, x2, y), t = self.cv, self.as_geo, ("live",)
+        cv.delete("live")
+        if self.mascot:
+            self.mascot.play(self._mascot_anim())
+            self.mascot.draw(cv, x1 + 46, self.nh + 70, 100, t)
+        if self.voice == "think":
+            sx = tx + self.as_label_w + 14
+            cv.create_arc(sx - 6, y - 6, sx + 6, y + 6, start=-now * 360, extent=270, style="arc",
+                          outline=self.accent, width=2, tags=t)
+        elif self.voice == "speak":
+            for i in range(5):
+                bx = tx + self.as_label_w + 12 + i * 5
+                hh = 1.5 + 6 * self.mouth.level * (0.6 + 0.4 * math.sin(now * 11 + i * 1.4))
+                cv.create_line(bx, y - hh, bx, y + hh, fill=self.accent, width=2.5, capstyle="round", tags=t)
+        elif self.voice == "listen":
+            if self.ear.silence_left is not None:  # the 3 second countdown before the request is taken
+                rx = x2 - 40
+                cv.create_oval(rx - 7, y - 7, rx + 7, y + 7, outline=LINE, width=2, tags=t)
+                cv.create_arc(rx - 7, y - 7, rx + 7, y + 7, start=90,
+                              extent=-359.9 * self.ear.silence_left / raven.SILENCE_END, style="arc",
+                              outline=self.accent, width=2, tags=t)
+            n, cy = len(self.levels), y + 70
+            for i, v in enumerate(self.levels):
+                bx = tx + (i + 0.5) * (x2 - tx) / n
+                hh = 1.5 + 26 * v
+                cv.create_line(bx, cy - hh, bx, cy + hh, fill=blend(WAVE, self.accent, min(v * 2, 1)), width=3,
+                               capstyle="round", tags=t)
 
-        draw(False)
-        self.hit(tag, (x - 9, y - 9, x + 9, y + 9), click=lambda: self.set_theme(name),
-                 enter=lambda: draw(True), leave=lambda: draw(False))
+    @staticmethod
+    def _clip(text, n):
+        return text if len(text) <= n else text[:n - 1] + "…"
+
+    @staticmethod
+    def _tail(text, n=130):
+        """The last few lines of the reply, so the newest words stay in view."""
+        text = " ".join(text.split())
+        return text if len(text) <= n else "…" + text[-n:].split(" ", 1)[-1]
 
     def _body(self):
         cv, h = self.cv, self.cur["h"]
@@ -591,7 +901,7 @@ class Island:
         # text box + generate button
         rrect(cv, x1, self.fy1, x2 - 56, self.fy2, 14, fill=FIELD, outline="")
         self.text.configure(insertbackground=self.accent, selectbackground=blend(FIELD, self.accent, 0.4))
-        if self.fy2 <= h - 8:
+        if self.fy2 <= h - 8 and not self.tweening:
             cv.create_window(x1 + 12, self.fy1 + 9, window=self.text, anchor="nw", width=x2 - 56 - x1 - 24,
                              height=self.fy2 - self.fy1 - 16)
         self.gen_geo = (x2 - 22, (self.fy1 + self.fy2) / 2)
@@ -639,7 +949,7 @@ class Island:
         cv.create_text(x1, y, text="Seed", anchor="w", fill=MUTED, font=self.f_s)
         rrect(cv, x1 + 92, y - 15, x2 - 72, y + 15, 10, fill=FIELD, outline="")
         self.seed_entry.configure(insertbackground=self.accent)
-        if y + 15 <= h - 8:
+        if y + 15 <= h - 8 and not self.tweening:
             cv.create_window(x1 + 104, y, window=self.seed_entry, anchor="w", width=x2 - 72 - x1 - 92 - 24)
         self._icon_btn("dice", x2 - 50, y, 14, "dice", self._random_seed, scale=0.8)
         self.lock_geo = (x2 - 14, y)
@@ -701,7 +1011,10 @@ class Island:
                 return
             cv.create_oval(x - 22, y - 22, x + 22, y + 22, fill=blend(self.accent, TEXT, 0.3) if hover else self.accent,
                            outline="", tags=t)
-            cv.create_polygon(x - 5, y - 9, x - 5, y + 9, x + 9, y, fill=ISLAND, outline="", tags=t)
+            if self.raven_mode:
+                draw_icon(cv, "spark", x, y, ISLAND, 1.0, t)
+            else:
+                cv.create_polygon(x - 5, y - 9, x - 5, y + 9, x + 9, y, fill=ISLAND, outline="", tags=t)
 
         draw(False)
         self.hit("gen", (x - 22, y - 22, x + 22, y + 22), click=None if self.busy else self.play,
@@ -758,11 +1071,6 @@ class Island:
     def _ready(self):
         """True when the expanded body is on screen (so partial redraws have something to update)."""
         return self.expanded and not self.tweening
-
-    def set_theme(self, name):
-        if name != self.theme:
-            self.theme = name
-            self.draw()
 
     def _speed_at(self, x, _y):
         a, b, _ = self.speed_geo
@@ -867,16 +1175,21 @@ class Island:
             pass
         now = time.perf_counter()
         self._track_pointer(now)
+        if self.voice in ("listen", "speak"):
+            self.levels.append(self.ear.level if self.voice == "listen" else self.mouth.level)
         if self.playing:
             pos = self.play_off + now - self.play_t0
             if pos >= self.speech.duration:
                 self.playing, self.progress = False, 1.0
-                if self._ready():
+                self._resume_ear()
+                if self._ready() and not self.assist:
                     self.draw_play()
             else:
                 self.progress = pos / self.speech.duration
         if self._ready():
-            if self.busy:
+            if self.assist:
+                self.draw_assist_live(now)
+            elif self.busy:
                 self.draw_wave(now * 6)
                 self.draw_gen(now)
             elif self.playing or self.progress == 1.0:
@@ -884,6 +1197,8 @@ class Island:
                 self.cv.itemconfigure(self.time_id, text=self._time_text())
         elif not self.expanded and not self.tweening:
             self.draw_ind(now)
+        if self.bar.visible:
+            self.bar.draw_live()
         self.root.after(33, self._poll)
 
     def _track_pointer(self, now):
@@ -891,7 +1206,7 @@ class Island:
         px, py = self.root.winfo_pointerxy()
         c = self.cur
         inside = abs(px - (self.win_x + self.win_w / 2)) <= c["w"] / 2 + c["s"] and 0 <= py <= c["h"] + 4
-        if inside:
+        if inside or (self.expanded and (self.bar.contains(px, py) or self.bar.focused())):
             self.last_inside = now
         if not self.expanded:
             if not inside:
@@ -901,7 +1216,9 @@ class Island:
             elif now - self.hover_since > 0.08:
                 self.hover_since = None
                 self.expand()
-        elif not inside and now - self.last_inside > 0.45 and not self.modal and self.pressed is None:
+        elif (now - self.last_inside > (3.0 if self.bar.visible else 0.45)  # time to reach the bottom bar
+              and not self.modal and self.pressed is None
+              and not self._voice_active() and now > self.hold_until):  # stay open while Raven is busy
             self.collapse()
 
     def _on_status(self, v):
@@ -933,9 +1250,147 @@ class Island:
             self.draw_save()
             self.draw_wave()
 
+    # ----- voice assistant -----
+    def _voice_active(self):
+        return self.voice in ("listen", "think", "speak")
+
+    def _refresh(self):
+        if self._ready():
+            self.draw()
+
+    def _resume_ear(self):
+        if self.voice == "wake" and self.wake_enabled:
+            self.ear.wake()
+
+    def _interrupt(self):
+        """Stop whatever is being said or thought, and any read-aloud playback."""
+        self.cancel.set()
+        self.mouth.stop()
+        self.stop()
+
+    def _seed_value(self):
+        s = self._seed_get()
+        return int(s) if s.isdigit() else None
+
+    def _ask(self, text):
+        self._interrupt()
+        self.user_text, self.reply, self.voice, self.reply_mood = text, "", "think", "happy"
+        self.ear.pause()  # don't let Raven hear itself
+        self.voice_cfg = (self.speed, self._seed_value(), self.rate)
+        self.expand(assist=True)
+        self.mouth.begin()
+        self.cancel = cancel = threading.Event()
+
+        def on_delta(d):
+            if not cancel.is_set():
+                self.mouth.feed(d)
+                self.events.put(("reply", d))
+
+        def run():
+            err = self.brain.ask(text, on_delta, cancel)
+            if cancel.is_set():
+                return
+            if err:
+                self.events.put(("mood", "sad"))
+                self.events.put(("reply", err))
+                self.mouth.say(err)
+            else:
+                self.mouth.end()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _end_voice(self, hold):
+        """Back to waiting for "Raven"; keep the island open for `hold` seconds so the reply can be read."""
+        self.voice = "wake" if self.ear_ready else "boot"
+        self.hold_until = time.perf_counter() + hold
+        self._resume_ear()
+        self._refresh()
+
+    def end_assist(self):
+        self._interrupt()
+        self._end_voice(hold=0)
+        self.assist = False
+        if self.expanded:
+            self._animate(0.3, ease_out)
+
+    def toggle_wake(self):
+        self.wake_enabled = self.ear.enabled = not self.wake_enabled
+        self._resume_ear()
+        self._refresh()
+
+    def toggle_mode(self):
+        self.raven_mode = not self.raven_mode
+        self._refresh()
+
+    def _escape(self):
+        if self._voice_active():
+            self.end_assist()
+        elif self.playing:
+            self.stop()
+            self._resume_ear()
+        else:
+            self.collapse()
+
+    def _set_mood(self, name, seconds):
+        self.mood, self.mood_until = name, time.perf_counter() + seconds
+
+    def _on_mood(self, name):
+        self.reply_mood = name
+
+    def _on_ear_ready(self, _):
+        self.ear_ready = True
+        self._set_mood("waking", 2.8)
+        if self.voice == "boot":
+            self.voice = "wake"
+        self._resume_ear()
+        self._refresh()
+
+    def _on_ear_error(self, msg):
+        self.ear_error = msg
+        self.status(msg, DANGER)
+        self._refresh()
+
+    def _on_wake(self, rest):
+        self.voice = "listen"  # the ear has already switched to recording
+        self.cancel.set()
+        self.mouth.stop()
+        self.stop()
+        self.user_text, self.reply = rest, ""
+        self.levels.extend([0.0] * self.levels.maxlen)
+        self.expand(assist=True)
+
+    def _on_heard(self, text):
+        if text:
+            self._ask(text)
+        else:
+            self._end_voice(hold=1.5)
+
+    def _on_timeout(self, _):
+        self._set_mood("bored", 3.0)
+        self._end_voice(hold=1.0)
+
+    def _on_reply(self, delta):
+        self.reply += delta
+        if self._ready() and self.assist:
+            self.cv.itemconfigure("as_reply", text=self._tail(self.reply))
+
+    def _on_speak_start(self, _):
+        self.voice = "speak"
+        self._refresh()
+
+    def _on_speak_end(self, _):
+        self._end_voice(hold=4.0)
+
     # ----- actions -----
     def play(self):
         if self.busy:
+            return
+        if self.raven_mode:  # typed prompt: ask Raven, the answer is spoken
+            text = self.text.get("1.0", "end-1c").strip()
+            if text:
+                self._ask(text)
+            else:
+                self.status("Önce bir şey yaz", DANGER)
             return
         if self.tts is None:
             self.status("Model henüz yüklenmedi, bekle…")
@@ -963,6 +1418,7 @@ class Island:
             return
         if self.playing:
             self.stop()
+            self._resume_ear()
         elif self.speech is not None and self.speech_key == self._safe_params():
             self._start(0.0 if self.progress >= 1 else self.progress * self.speech.duration)
         else:
@@ -978,6 +1434,8 @@ class Island:
 
     def _start(self, offset):
         sp = self.speech
+        self.ear.pause()
+        self.mouth.stop()
         sd.stop()
         sd.play(sp.audio[int(offset * sp.sample_rate):], sp.sample_rate)
         self.play_off, self.play_t0, self.playing = offset, time.perf_counter(), True
@@ -1012,7 +1470,16 @@ class Island:
             write_wav(path, self.speech.audio, self.speech.sample_rate)
             self.status(f"Kaydedildi: {Path(path).name}")
 
+    def new_chat(self):
+        """Forget the conversation (it only ever lives in memory anyway)."""
+        self._interrupt()
+        self.brain.reset()
+        self.user_text = self.reply = ""
+        self._end_voice(hold=0)
+
     def quit(self):
+        self.ear.close()
+        self.mouth.stop()
         sd.stop()
         self.root.destroy()
 

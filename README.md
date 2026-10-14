@@ -46,9 +46,20 @@ On Macs and other machines without an NVIDIA GPU, the model runs on the CPU. The
 
 - Sits on top of the menu bar and hugs the notch. Hover over it to open, move away to close
 - Collapsed, it shows small bars while audio plays, a spinner while generating, and the playback time
-- Open, the notch row holds the theme dots, plus buttons for settings, GitHub and quit (or ⌘Q)
+- Open, the notch row holds the microphone toggle and buttons for ask/read mode, settings, GitHub and quit (or ⌘Q). The island has one fixed lavender accent
 - The same text box, player and voice settings as EMA GUI, sized to fit under the notch
 - No Dock icon; on Macs without a notch it floats as a pill at the top center of the screen
+
+### Raven, the voice assistant
+
+Say **"Raven"** (pronounced *rey-vın*). The island opens and listens; ask your question, and after 3 seconds of silence it is sent to Gemini (the newest Flash model your key can use). The reply streams back and EMA speaks it sentence by sentence. You can also say it in one breath: "Raven, yarın hava nasıl?"
+
+- Wake word and speech-to-text run locally with Whisper on Apple Silicon (`mlx-whisper`); only the transcribed text leaves the computer
+- The conversation is kept in memory only and is gone when the app quits
+- Typed prompts go to Raven too; the ✦ / 🔈 icon switches the text box between asking Raven and reading the text aloud
+- The microphone icon turns wake-word listening on and off; Esc stops Raven mid-sentence
+- Needs microphone permission for the app you launch it from (Terminal, VS Code, …)
+- Needs a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey): copy `.env.example` to `.env` and fill in `GEMINI_API_KEY` (the `.env` file is git-ignored). `GEMINI_MODEL` pins a model; `ANTHROPIC_API_KEY` uses Claude Haiku 5.5 instead
 
 ## Credits
 
