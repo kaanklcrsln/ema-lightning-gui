@@ -1,8 +1,6 @@
 # EMA Lightning GUI
 
-<!-- BANNER: put the banner image in the repo (e.g. assets-readme/banner.png) and uncomment:
-<p align="center"><img src="assets-readme/banner.png" alt="Raven" width="100%"></p>
--->
+<img width="1920" height="1080" alt="kirbybanner_00000" src="https://github.com/user-attachments/assets/751137ad-a7df-48db-932b-d6acefc9ec7c" />
 
 Two desktop front-ends for [EMA Lightning](https://huggingface.co/canberkkkkkk/ema-lightning), a fast Turkish text-to-speech model. Both are built with Tkinter and run fully offline once the model is downloaded.
 
