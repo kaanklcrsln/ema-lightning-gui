@@ -14,5 +14,6 @@ MODEL_CARD.md
 *.wav
 .DS_Store
 
-# Secrets
+# Secrets: no env file is ever committed
 .env
+.env.*

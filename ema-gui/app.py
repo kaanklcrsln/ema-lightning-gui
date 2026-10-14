@@ -23,7 +23,7 @@ import numpy as np
 import sounddevice as sd
 
 HERE = Path(__file__).resolve().parent
-REPO_URL = "https://github.com/kaanklcrsln/ema-lightning-gui"
+REPO_URL = "https://github.com/kaanklcrsln/raven"
 
 
 def blend(c1, c2, t):

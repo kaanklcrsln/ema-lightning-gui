@@ -33,7 +33,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))  # raven.py sits next to this file
 import raven  # noqa: E402
 from mascot import Mascot  # noqa: E402
-REPO_URL = "https://github.com/kaanklcrsln/ema-lightning-gui"
+REPO_URL = "https://github.com/kaanklcrsln/raven"
 
 
 def blend(c1, c2, t):
