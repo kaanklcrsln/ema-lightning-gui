@@ -30,3 +30,44 @@ jobs:
           assert wav[:4] == b"RIFF" and out["duration"] > 0.5, out
           print(f"speak OK: {out['duration']:.2f} s of audio, {len(wav)} bytes, {time.perf_counter() - t:.1f} s")
           PY
+
+  browser:
+    # The site's own path: a page on the Pages origin connects to the Space with @gradio/client and asks for speech.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Speak through the browser client from the Pages origin
+        run: |
+          npm init -y > /dev/null
+          npm install --no-fund --no-audit playwright > /dev/null
+          npx playwright install --with-deps chromium > /dev/null
+          cat > check.mjs <<'JS'
+          import { chromium } from 'playwright'
+          const browser = await chromium.launch()
+          const page = await browser.newPage()
+          const log = []
+          page.on('console', m => log.push(`console.${m.type()}: ${m.text()}`))
+          page.on('requestfailed', r => log.push(`failed: ${r.url()} ${r.failure()?.errorText}`))
+          page.on('response', r => { if (r.status() >= 400) log.push(`HTTP ${r.status()} ${r.url()}`) })
+          await page.addInitScript(() => localStorage.setItem('raven.geminiKey', 'placeholder'))
+          await page.goto('https://kaanklcrsln.github.io/raven/', { waitUntil: 'networkidle' })
+          await page.waitForTimeout(15000)
+          console.log('site footnote:', (await page.textContent('.footnote'))?.trim())
+          const result = await page.evaluate(async () => {
+            try {
+              const { Client } = await import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/+esm')
+              const client = await Client.connect('kaanklcrsln/raven-api')
+              const r = await client.predict('/speak', { text: 'Merhaba, ben Raven.', speed: 1, seed: 7, sample_rate: 24000 })
+              return `speak OK: ${r.data[0].duration.toFixed(2)} s`
+            } catch (e) {
+              return `speak FAILED: ${e instanceof Error ? e.message : JSON.stringify(e)}`
+            }
+          })
+          console.log(result)
+          console.log(log.join('\n') || 'no console errors or failed requests')
+          await browser.close()
+          if (!result.startsWith('speak OK')) process.exit(1)
+          JS
+          node check.mjs

@@ -41,7 +41,7 @@ function spaceError(e: unknown): Error {
     return new Error('Ses sunucusunun bugünkü ücretsiz GPU kotan doldu. Kota 24 saat içinde yenilenir.')
   }
   if (/app config|fetch|network/i.test(message)) {
-    return new Error('Ses sunucusuna (Hugging Face) ulaşılamadı. Bağlı olduğun ağ hf.space adreslerini engelliyor olabilir.')
+    return new Error(`Ses sunucusuna (Hugging Face) ulaşılamadı: ${message}. Bağlı olduğun ağ hf.space adreslerini engelliyor olabilir.`)
   }
   return new Error(message || 'Ses sunucusunda bir hata oluştu.')
 }
