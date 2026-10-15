@@ -28,6 +28,10 @@ EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️]")
 
 # The model goes on the GPU at import time: on ZeroGPU that is the efficient place, a real GPU only exists inside @spaces.GPU.
 tts = EMA(DEVICE)
+# Left unset, EMA times batches of up to 128 on its first request to pick a batch size. On ZeroGPU's shared GPU the
+# big batches run out of memory, which surfaces as an NVML assert instead of the OutOfMemoryError EMA catches.
+# Requests here are one reply at a time, so a small fixed batch is enough.
+tts._batch_size = 4
 
 
 def speakable(s):
