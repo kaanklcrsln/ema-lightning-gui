@@ -89,6 +89,10 @@ def speak(text: str, speed: float, seed: int, sample_rate: int) -> dict:
         raise gr.Error(f"Seed 0 ile {SEED_MAX} arasında olmalı.")
     if sample_rate not in RATES:
         raise gr.Error(f"Örnekleme hızı şunlardan biri olmalı: {', '.join(map(str, RATES))}.")
+    # ZeroGPU restores the weights in its GPU worker as trainable tensors, so EMA's playback thread would build a
+    # gradient graph and .numpy() on the audio fails. Speech never needs gradients.
+    tts._engine.model.requires_grad_(False)
+    tts._engine.decoder.requires_grad_(False)
     gap = np.zeros(int(sample_rate * GAP), np.float32)
     parts = []
     for s in sentences(text):
