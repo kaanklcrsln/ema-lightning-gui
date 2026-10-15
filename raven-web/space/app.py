@@ -1,14 +1,12 @@
-"""Raven API: the speech side of Raven Web, as a Hugging Face ZeroGPU Space.
+"""Raven API: Raven Web's voice, as a Hugging Face ZeroGPU Space.
 
-    /transcribe  base64 16 kHz mono WAV -> text (Whisper)
-    /speak       text + voice settings -> {audio: base64 WAV, duration} (EMA Lightning)
+    /speak  text + voice settings -> {audio: base64 WAV, duration} (EMA Lightning)
 
 The site talks to Gemini itself with each visitor's own key; nothing here sees that key or the conversation.
-Run locally with `python app.py` (CPU, whisper-small); the site then connects to http://127.0.0.1:7860.
+Run locally with `python app.py` (CPU); the site then connects to http://127.0.0.1:7860.
 """
 import base64
 import io
-import os
 import re
 import wave
 
@@ -17,26 +15,19 @@ import numpy as np
 import spaces
 import torch
 from ema_lightning import EMA
-from transformers import pipeline
 
 SOURCE = "https://github.com/kaanklcrsln/raven"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-STT_MODEL = os.environ.get("RAVEN_STT_MODEL") or ("openai/whisper-large-v3" if DEVICE == "cuda" else "openai/whisper-small")
-STT_RATE = 16000
-MAX_AUDIO_S = 60
 MAX_TEXT = 2000
 RATES = (8000, 16000, 24000, 48000)  # same choices as EMA Island
 SPEED_MIN, SPEED_MAX = 0.25, 4.0
 SEED_MAX = 2 ** 31 - 1
 GAP = 0.15  # seconds of silence between sentences
 MAX_SENTENCE = 220
-HALLUCINATIONS = ("altyazı", "abone ol", "izlediğiniz için")  # Whisper's usual inventions on near-silence
 EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️]")
 
-# Models go on the GPU at import time: on ZeroGPU that is the efficient place, a real GPU only exists inside @spaces.GPU.
+# The model goes on the GPU at import time: on ZeroGPU that is the efficient place, a real GPU only exists inside @spaces.GPU.
 tts = EMA(DEVICE)
-stt = pipeline("automatic-speech-recognition", model=STT_MODEL, device=DEVICE,
-               dtype=torch.float16 if DEVICE == "cuda" else torch.float32)
 
 
 def speakable(s):
@@ -80,29 +71,6 @@ def wav_bytes(audio, rate):
     return buf.getvalue()
 
 
-def read_wav(data):
-    with wave.open(io.BytesIO(data)) as w:
-        if (w.getnchannels(), w.getsampwidth(), w.getframerate()) != (1, 2, STT_RATE):
-            raise ValueError("ses 16 kHz, mono, 16 bit WAV olmalı")
-        if w.getnframes() > MAX_AUDIO_S * STT_RATE:
-            raise ValueError(f"kayıt {MAX_AUDIO_S} saniyeden uzun olamaz")
-        return np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(np.float32) / 32768
-
-
-@spaces.GPU(duration=20)
-def transcribe(audio_b64: str) -> str:
-    """Turkish speech in a base64 16 kHz mono 16-bit WAV, as text ("" if nothing was said)."""
-    try:
-        samples = read_wav(base64.b64decode(audio_b64, validate=True))
-    except (ValueError, wave.Error) as e:
-        raise gr.Error(f"Ses kaydı okunamadı: {e}.")
-    long_form = {"return_timestamps": True} if len(samples) > 30 * STT_RATE else {}
-    out = stt({"raw": samples, "sampling_rate": STT_RATE},
-              generate_kwargs={"language": "turkish", "task": "transcribe"}, **long_form)
-    text = out["text"].strip()
-    return "" if any(h in text.lower() for h in HALLUCINATIONS) else text
-
-
 @spaces.GPU(duration=30)
 def speak(text: str, speed: float, seed: int, sample_rate: int) -> dict:
     """Raven's reply read aloud by EMA Lightning: {"audio": base64 WAV, "duration": seconds}."""
@@ -128,11 +96,11 @@ def speak(text: str, speed: float, seed: int, sample_rate: int) -> dict:
 
 with gr.Blocks(title="Raven API") as demo:
     gr.Markdown(f"""# Raven API
-[Raven Web]({SOURCE})'in ses sunucusu. Konuşmayı [Whisper](https://github.com/openai/whisper) ile yazıya döker, \
-cevabı Canberk Aslan'ın Türkçe ses modeli [EMA Lightning](https://huggingface.co/canberkkkkkk/ema-lightning) ile \
-seslendirir. Bu sayfa yalnızca API sunar; kaynak kodu [GitHub'da]({SOURCE}) (AGPL-3.0).""")
-    gr.api(transcribe, api_name="transcribe")
+[Raven Web]({SOURCE})'in ses sunucusu. Cevapları Canberk Aslan'ın Türkçe ses modeli \
+[EMA Lightning](https://huggingface.co/canberkkkkkk/ema-lightning) ile seslendirir. Bu sayfa yalnızca API sunar; \
+kaynak kodu [GitHub'da]({SOURCE}) (AGPL-3.0).""")
     gr.api(speak, api_name="speak")
 
 if __name__ == "__main__":
-    demo.launch()
+    # No server-side rendering: the site calls the API from another origin, the Node SSR proxy adds nothing here.
+    demo.launch(ssr_mode=False)

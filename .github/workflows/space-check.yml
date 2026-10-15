@@ -1,0 +1,32 @@
+# Checks the voice Space from outside: GitHub's runners reach hf.space even where a local network blocks it.
+name: Raven API check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Config and CORS for the Pages origin
+        run: |
+          curl -sS -D headers.txt -o config.json --max-time 300 \
+            -H "Origin: https://kaanklcrsln.github.io" https://kaanklcrsln-raven-api.hf.space/config
+          grep -iE "^HTTP|access-control-allow-origin" headers.txt
+          python3 -c "import json; c = json.load(open('config.json')); print('gradio', c.get('version'), '| ssr', c.get('is_ssr', c.get('ssr_mode')), '| api', [d.get('api_name') for d in c.get('dependencies', []) if d.get('api_name')])"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Speak a sentence
+        run: |
+          pip install -q gradio_client
+          python - <<'PY'
+          import base64, time
+          from gradio_client import Client
+          c = Client("kaanklcrsln/raven-api", verbose=False)
+          t = time.perf_counter()
+          out = c.predict(text="Merhaba, ben Raven. Sana nasıl yardımcı olabilirim?", speed=1.0, seed=7, sample_rate=24000, api_name="/speak")
+          wav = base64.b64decode(out["audio"])
+          assert wav[:4] == b"RIFF" and out["duration"] > 0.5, out
+          print(f"speak OK: {out['duration']:.2f} s of audio, {len(wav)} bytes, {time.perf_counter() - t:.1f} s")
+          PY

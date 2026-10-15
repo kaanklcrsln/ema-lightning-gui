@@ -1,13 +1,5 @@
 const ICONS = {
-  mic: (
-    <>
-      <rect x="9" y="3" width="6" height="11" rx="3" />
-      <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
-    </>
-  ),
   arrowUp: <path d="M12 19V5M6 11l6-6 6 6" />,
-  stop: <rect x="7" y="7" width="10" height="10" rx="2.5" fill="currentColor" stroke="none" />,
-  close: <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />,
   play: <path d="M8.5 5.8v12.4a.8.8 0 0 0 1.2.7l9.8-6.2a.8.8 0 0 0 0-1.4L9.7 5.1a.8.8 0 0 0-1.2.7z" fill="currentColor" stroke="none" />,
   pause: (
     <>

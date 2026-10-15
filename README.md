@@ -8,7 +8,7 @@ Hızlı bir Türkçe metinden konuşmaya (TTS) modeli olan [EMA Lightning](https
 |---|---|
 | [`ema-gui/`](ema-gui) | Koyu, cam görünümlü küçük bir pencere. Arkasında yavaşça kayan bir ışıltı var |
 | [`ema-island/`](ema-island) | Yalnızca macOS. EMA, MacBook'un çentiğine yerleşir. Üzerine gelince açılan siyah bir hap |
-| [`raven-web/`](raven-web) | Raven'ın [kaanklcrsln.github.io/raven](https://kaanklcrsln.github.io/raven/) adresindeki sohbet sitesi. Soruları yazıyla ya da sesli mesajla alır, cevabı sesli mesajla verir |
+| [`raven-web/`](raven-web) | Raven'ın [kaanklcrsln.github.io/raven](https://kaanklcrsln.github.io/raven/) adresindeki sohbet sitesi. Soruları yazıyla alır, cevabı sesli mesajla verir |
 
 ## Kurulum
 
@@ -76,10 +76,10 @@ NVIDIA GPU'su olmayan Mac'lerde ve diğer bilgisayarlarda model CPU'da çalış�
 
 ## Raven Web
 
-Raven'ı tarayıcıdan kullanmak için bir site: **https://kaanklcrsln.github.io/raven/**. Yazarak ya da sesli mesajla soru sorarsın, Raven sesli mesajla cevap verir ve mesajlar sohbet gibi alt alta dizilir.
+Raven'ı tarayıcıdan kullanmak için bir site: **https://kaanklcrsln.github.io/raven/**. Sorunu yazarsın, cevabı Gemini üretir, EMA Lightning seslendirir ve mesajlar sohbet gibi alt alta dizilir.
 
 - İlk açılışta site senden bir Google Gemini API anahtarı ister ve adımları gösterir. Anahtarı [Google AI Studio](https://aistudio.google.com/apikey)'dan ücretsiz alabilirsin. Anahtar yalnızca senin tarayıcında saklanır ve Gemini'ye doğrudan tarayıcıdan bağlanılır
-- Ses tanıma (Whisper large-v3) ve seslendirme (EMA Lightning), Hugging Face'teki ücretsiz bir ZeroGPU Space'te ([`raven-web/space/`](raven-web/space)) çalışır. Space bir süre kullanılmazsa uyur, ilk istekte uyanması bir iki dakika sürebilir. ZeroGPU'nun ziyaretçi başına günlük GPU kotası var, giriş yapmamış biri için günde 2 dakika. Kısa cevaplar için bu çoğu zaman yeter
+- Seslendirme (EMA Lightning), Hugging Face'teki ücretsiz bir ZeroGPU Space'te ([`raven-web/space/`](raven-web/space), [kaanklcrsln/raven-api](https://huggingface.co/spaces/kaanklcrsln/raven-api)) çalışır. Space bir süre kullanılmazsa uyur, ilk istekte uyanması bir iki dakika sürebilir. ZeroGPU'nun ziyaretçi başına günlük GPU kotası var, giriş yapmamış biri için günde 2 dakika. Kısa cevaplar için bu çoğu zaman yeter. `hf.space` adreslerini engelleyen ağlarda seslendirme çalışmaz
 - Ortadaki Raven, sen yazarken imleci gözleri ve başıyla takip eder. Mesaj gidince ekrandan çıkar ve yerine yükleniyor animasyonu gelir
 - Raven'ın cevabı sesli mesaj olarak gelir ve kendiliğinden çalar. "Metni göster" cevabın yazısını açar
 - Kenar çubuğunun üstündeki Raven'a tıklayınca kenar çubuğu açılır ya da kapanır, Raven'ın yüz ifadesi de değişir. Altındaki **Kullanım** sekmesi bu tarayıcıdan harcanan Gemini token'larını günlük grafik ve model tablosuyla gösterir. Anahtarı değiştirmek de buradan yapılır
@@ -88,11 +88,11 @@ Raven'ı tarayıcıdan kullanmak için bir site: **https://kaanklcrsln.github.io
 
 ### Yerelde çalıştırma
 
-Node.js 20.19 ya da üstü gerekir. Ses sunucusu için `.venv` içine Gradio ve transformers kur. `space/requirements.txt` torch sürümünü ZeroGPU'ya göre sabitlediği için onu yerelde kullanma:
+Node.js 20.19 ya da üstü gerekir. Ses sunucusu için `.venv` içine Gradio'yu kur. `space/requirements.txt` torch sürümünü ZeroGPU'ya göre sabitlediği için onu yerelde kullanma:
 
 ```bash
-.venv/bin/pip install gradio==6.30.0 spaces transformers
-.venv/bin/python raven-web/space/app.py     # http://127.0.0.1:7860, CPU'da whisper-small ile
+.venv/bin/pip install gradio==6.30.0 spaces
+.venv/bin/python raven-web/space/app.py     # http://127.0.0.1:7860, CPU'da
 
 cd raven-web
 npm install
@@ -109,7 +109,7 @@ Bu proje aşağıdaki çalışmaların üzerine kurulu. Hepsinin geliştiriciler
 |---|---|---|---|
 | [EMA Lightning](https://huggingface.co/canberkkkkkk/ema-lightning) | Canberk Aslan | Apache-2.0 | Türkçe metinden konuşma modeli ve `ema-lightning` paketi |
 | [normalizer-tr](https://github.com/erdemtuna/normalizer-tr) | Erdem Tuna | Apache-2.0 | Sayıları, tarihleri ve sembolleri okunuşa çeviren Türkçe metin normalleştirici. EMA Lightning içinden çalışır |
-| [Whisper](https://github.com/openai/whisper) | OpenAI | MIT | Konuşma tanıma modeli |
+| [Whisper](https://github.com/openai/whisper) | OpenAI | MIT | EMA Island'ın konuşma tanıma modeli |
 | [MLX](https://github.com/ml-explore/mlx) ve [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) | Apple ve MLX katkıcıları | MIT | Whisper'ı Apple Silicon üzerinde çalıştırır |
 | [whisper-base-mlx](https://huggingface.co/mlx-community/whisper-base-mlx) ve [whisper-small-mlx](https://huggingface.co/mlx-community/whisper-small-mlx) | mlx-community | MIT (OpenAI Whisper) | Whisper ağırlıklarının MLX biçimine dönüştürülmüş halleri |
 | [Silero VAD](https://github.com/snakers4/silero-vad) | Silero Team | MIT | Konuşmanın başını ve sonunu algılar |
@@ -126,11 +126,11 @@ Bu proje aşağıdaki çalışmaların üzerine kurulu. Hepsinin geliştiriciler
 | [Nunito](https://github.com/googlefonts/nunito) | The Nunito Project Authors | OFL-1.1 | Raven Web'deki metin yazı tipi. [Fontsource](https://fontsource.org) paketiyle gelir |
 | [React](https://react.dev) | Meta ve React katkıcıları | MIT | Raven Web arayüzü |
 | [Gradio](https://www.gradio.app) ve [@gradio/client](https://www.npmjs.com/package/@gradio/client) | Hugging Face | Apache-2.0 ve ISC | Raven Web'in ses sunucusu ve sitenin ona bağlanması |
-| [Transformers](https://github.com/huggingface/transformers) ve [ZeroGPU](https://huggingface.co/docs/hub/en/spaces-zerogpu) | Hugging Face | Apache-2.0 | Whisper'ı Space'te çalıştırır, GPU'yu istek başına ayırır |
+| [ZeroGPU](https://huggingface.co/docs/hub/en/spaces-zerogpu) (`spaces`) | Hugging Face | Apache-2.0 | Raven Web'in Space'inde GPU'yu istek başına ayırır |
 | [Vite](https://vite.dev) ve [TypeScript](https://www.typescriptlang.org) | Vite ekibi ve Microsoft | MIT ve Apache-2.0 | Raven Web'i derler |
 | [Python](https://www.python.org) ve [Tcl/Tk](https://www.tcl-lang.org) | Python Software Foundation ve Tcl/Tk katkıcıları | PSF ve Tcl/Tk lisansı | Programlama dili ve Tkinter arayüz kütüphanesi |
 
-**Hizmetler.** Raven'ın cevapları [Google Gemini API](https://ai.google.dev) üzerinden gelir. EMA Island'da yedek olarak [Anthropic Claude API](https://www.anthropic.com/api) da kullanılabilir. Yazıya dökülen metin bu sağlayıcılara gönderilir. Raven Web'de ses kayıtları ve seslendirilecek metin [Hugging Face Spaces](https://huggingface.co/spaces)'e gider. Bu hizmetlerin hepsi kendi kullanım koşullarına tabidir.
+**Hizmetler.** Raven'ın cevapları [Google Gemini API](https://ai.google.dev) üzerinden gelir. EMA Island'da yedek olarak [Anthropic Claude API](https://www.anthropic.com/api) da kullanılabilir. Yazıya dökülen metin bu sağlayıcılara gönderilir. Raven Web'de seslendirilecek cevap metni [Hugging Face Spaces](https://huggingface.co/spaces)'e gider. Bu hizmetlerin hepsi kendi kullanım koşullarına tabidir.
 
 **Yazı tipleri.** Masaüstü arayüzleri, sistemde kuruluysa Apple'ın SF Pro ve SF Mono yazı tiplerini kullanır. Bu yazı tipleri repoda yer almaz.
 

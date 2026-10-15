@@ -1,5 +1,4 @@
 ema-lightning>=1.1.2
-transformers>=5
 torch==2.13.0
 numpy
 spaces

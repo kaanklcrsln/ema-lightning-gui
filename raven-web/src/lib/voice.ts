@@ -1,4 +1,4 @@
-// The speech side lives on a Hugging Face ZeroGPU Space (raven-web/space): Whisper and EMA Lightning.
+// Raven's voice lives on a Hugging Face ZeroGPU Space (raven-web/space): EMA Lightning.
 import { Client, type SpaceStatus } from '@gradio/client'
 
 export const RATES = [8000, 16000, 24000, 48000] as const
@@ -40,6 +40,9 @@ function spaceError(e: unknown): Error {
   if (/quota/i.test(message)) {
     return new Error('Ses sunucusunun bugünkü ücretsiz GPU kotan doldu. Kota 24 saat içinde yenilenir.')
   }
+  if (/app config|fetch|network/i.test(message)) {
+    return new Error('Ses sunucusuna (Hugging Face) ulaşılamadı. Bağlı olduğun ağ hf.space adreslerini engelliyor olabilir.')
+  }
   return new Error(message || 'Ses sunucusunda bir hata oluştu.')
 }
 
@@ -52,29 +55,11 @@ async function predict(endpoint: string, data: Record<string, unknown>): Promise
   }
 }
 
-const blobToBase64 = (blob: Blob) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const url = String(reader.result)
-      resolve(url.slice(url.indexOf(',') + 1))
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('Ses kaydı okunamadı.'))
-    reader.readAsDataURL(blob)
-  })
-
 const base64ToBlob = (b64: string, type: string) => {
   const bin = atob(b64)
   const bytes = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
   return new Blob([bytes], { type })
-}
-
-/** Turkish speech (16 kHz WAV) as text; "" when nothing was said. */
-export async function transcribe(wav: Blob): Promise<string> {
-  const text = await predict('/transcribe', { audio_b64: await blobToBase64(wav) })
-  if (typeof text !== 'string') throw new Error('Ses sunucusundan beklenmedik bir cevap geldi.')
-  return text
 }
 
 export async function speak(text: string, voice: VoiceSettings): Promise<{ audio: Blob; duration: number }> {

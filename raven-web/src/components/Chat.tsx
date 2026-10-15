@@ -4,8 +4,6 @@ import { VoiceMessage } from './VoiceMessage'
 
 export type Message =
   | { id: string; kind: 'user-text'; text: string }
-  /** transcript: null while the server is still turning it into text, '' if that failed */
-  | { id: string; kind: 'user-voice'; audio: Blob; duration: number; transcript: string | null }
   | { id: string; kind: 'raven'; audio: Blob; duration: number; text: string }
   | { id: string; kind: 'error'; text: string }
 
@@ -39,15 +37,6 @@ function Row({ m, autoPlay }: { m: Message; autoPlay: boolean }) {
   switch (m.kind) {
     case 'user-text':
       return <div className="row user"><div className="bubble">{m.text}</div></div>
-    case 'user-voice':
-      return (
-        <div className="row user">
-          <div className="bubble"><VoiceMessage audio={m.audio} duration={m.duration} /></div>
-          {m.transcript === null
-            ? <p className="caption">Yazıya dökülüyor…</p>
-            : m.transcript && <p className="caption">{m.transcript}</p>}
-        </div>
-      )
     case 'raven':
       return <RavenReply m={m} autoPlay={autoPlay} />
     case 'error':

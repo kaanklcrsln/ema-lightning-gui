@@ -28,7 +28,7 @@ export function useSpaceStatus(): SpaceState {
         (e: unknown) => {
           if (!live) return
           const why = e instanceof Error ? e.message : String(e)
-          setState({ kind: 'error', message: `Ses sunucusuna bağlanılamadı (${why}).` })
+          setState({ kind: 'error', message: `Ses sunucusuna bağlanılamadı (${why}). Bağlı olduğun ağ hf.space adreslerini engelliyor olabilir.` })
           timer = window.setTimeout(attempt, RETRY_MS)
         },
       )

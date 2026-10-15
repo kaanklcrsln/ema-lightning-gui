@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Kirby, type AnimationName, type AvatarHandle } from '../../kirby-avatar/Kirby'
 import { Chat, type Message } from './components/Chat'
-import { Composer, type Sent } from './components/Composer'
+import { Composer } from './components/Composer'
 import { KeyGate } from './components/KeyGate'
 import { Sidebar } from './components/Sidebar'
 import { Usage } from './components/Usage'
@@ -12,7 +12,7 @@ import { clearKey, loadKey, saveKey } from './lib/key'
 import { loadVoice, randomSeed, saveVoice } from './lib/settings'
 import { useSpaceStatus, type SpaceState } from './lib/status'
 import { clearUsage, loadUsage, recordUsage, type UsageEntry } from './lib/usage'
-import { speak, transcribe, type VoiceSettings } from './lib/voice'
+import { speak, type VoiceSettings } from './lib/voice'
 
 /** hero: Raven in the middle, nothing sent yet. leaving: the avatar's exit animation. chat: the conversation. */
 type Stage = 'hero' | 'leaving' | 'chat'
@@ -85,17 +85,9 @@ function Raven({ apiKey, onForgetKey }: { apiKey: string; onForgetKey: () => voi
     idleTimer.current = window.setTimeout(settle, IDLE_MS)
   }
 
-  const onRecordingChange = (recording: boolean) => {
-    settle()
-    if (recording) setMood('listening')
-  }
-
-  const send = async (sent: Sent) => {
+  const send = async (text: string) => {
     if (pending) return
-    const userId = crypto.randomUUID()
-    setMessages(ms => [...ms, sent.kind === 'text'
-      ? { id: userId, kind: 'user-text', text: sent.text }
-      : { id: userId, kind: 'user-voice', audio: sent.recorded.original, duration: sent.recorded.duration, transcript: null }])
+    setMessages(ms => [...ms, { id: crypto.randomUUID(), kind: 'user-text', text }])
     if (stage === 'hero') {
       settle()
       setStage('leaving')
@@ -103,18 +95,10 @@ function Raven({ apiKey, onForgetKey }: { apiKey: string; onForgetKey: () => voi
     }
     const seed = voice.seedLocked ? voice.seed : randomSeed()
     if (!voice.seedLocked) setVoice(v => ({ ...v, seed }))
-    const setTranscript = (transcript: string) =>
-      setMessages(ms => ms.map(m => (m.id === userId && m.kind === 'user-voice' ? { ...m, transcript } : m)))
-    const fail = (text: string) => setMessages(ms => [...ms, { id: crypto.randomUUID(), kind: 'error', text }])
+    const fail = (message: string) => setMessages(ms => [...ms, { id: crypto.randomUUID(), kind: 'error', text: message }])
     const reason = (e: unknown) => (e instanceof Error ? e.message : String(e))
     setPending(true)
     try {
-      let text = sent.kind === 'text' ? sent.text : ''
-      if (sent.kind === 'voice') {
-        text = await transcribe(sent.recorded.wav)
-        setTranscript(text)
-        if (!text) return fail('Seni duyamadım, tekrar dener misin?')
-      }
       if (history.current.length >= MAX_HISTORY) history.current = [] // a new conversation; history is never edited
       const answer = await ask({ key: apiKey, history: history.current, text })
       history.current = [...history.current, { role: 'user', parts: [{ text }] }, { role: 'model', parts: [{ text: answer.text }] }]
@@ -129,7 +113,6 @@ function Raven({ apiKey, onForgetKey }: { apiKey: string; onForgetKey: () => voi
         fail(`${answer.text}\n\nBu cevap seslendirilemedi: ${reason(e)}`)
       }
     } catch (e) {
-      if (sent.kind === 'voice') setMessages(ms => ms.map(m => (m.id === userId && m.kind === 'user-voice' && m.transcript === null ? { ...m, transcript: '' } : m)))
       fail(reason(e))
     } finally {
       setPending(false)
@@ -163,7 +146,7 @@ function Raven({ apiKey, onForgetKey }: { apiKey: string; onForgetKey: () => voi
                 </section>
               )}
               <div className="dock">
-                <Composer busy={pending} onSend={s => void send(s)} onCaret={onCaret} onRecordingChange={onRecordingChange} />
+                <Composer busy={pending} onSend={t => void send(t)} onCaret={onCaret} />
               </div>
             </div>
             <VoiceSettingsMenu value={voice} onChange={setVoice} />
