@@ -8,6 +8,7 @@ export type AvatarHandle = {
   play: (animation?: AnimationName) => void
   pause: () => void
   stop: () => void
+  look: (target: { x: number; y: number } | null) => void
 }
 export type AvatarProps = {
   animation?: AnimationName
@@ -73,6 +74,7 @@ export const Kirby = forwardRef<AvatarHandle, AvatarProps>(function Kirby(
     play(next = animation) { controller.current?.play(next) },
     pause() { controller.current?.pause() },
     stop() { controller.current?.stop() },
+    look(target) { controller.current?.look(target) },
   }), [animation])
 
   const dimension = typeof size === 'number' ? size + 'px' : size

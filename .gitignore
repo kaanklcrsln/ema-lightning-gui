@@ -17,3 +17,7 @@ MODEL_CARD.md
 # Secrets: no env file is ever committed
 .env
 .env.*
+
+# Raven Web (npm install / npm run build)
+raven-web/node_modules/
+raven-web/dist/
